@@ -16,6 +16,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -391,19 +392,20 @@ impl LsmStorageInner {
         let snapshot = self.state.read().imm_memtables.last().cloned().unwrap();
         let mut builder = SsTableBuilder::new(self.options.block_size);
         snapshot.flush(&mut builder)?;
-        let file_path = self.path_of_sst(snapshot.id());
+        let sst_id = self.next_sst_id();
+        let file_path = self.path_of_sst(sst_id);
         if let Some(parent) = file_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent)?;
             }
         }
-        let sstable = builder.build(snapshot.id(), None, self.path_of_sst(snapshot.id()))?;
+        let sstable = builder.build(sst_id, None, self.path_of_sst(sst_id))?;
 
         let mut guard = self.state.write();
         let mut state = guard.as_ref().clone();
         state.imm_memtables.pop();
-        state.sstables.insert(snapshot.id(), Arc::new(sstable));
-        state.l0_sstables.insert(0, snapshot.id());
+        state.sstables.insert(sst_id, Arc::new(sstable));
+        state.l0_sstables.insert(0, sst_id);
         *guard = Arc::new(state);
 
         Ok(())
@@ -457,8 +459,37 @@ impl LsmStorageInner {
                 .map(|x| Box::new(x.unwrap()))
                 .collect(),
         );
+        let mut sst_concat_iters: Vec<Box<SstConcatIterator>> = Vec::new();
+        for (_, sst_ids) in &guard.levels {
+            let mut sstables = Vec::new();
+            for sst_id in sst_ids {
+                sstables.push(guard.sstables.get(sst_id).unwrap().clone());
+            }
+            match lower {
+                Bound::Included(key) => {
+                    let iter = SstConcatIterator::create_and_seek_to_key(
+                        sstables,
+                        KeySlice::from_slice(key),
+                    )?;
+                    sst_concat_iters.push(Box::new(iter));
+                }
+                Bound::Excluded(key) => {
+                    let mut iter = SstConcatIterator::create_and_seek_to_key(
+                        sstables,
+                        KeySlice::from_slice(key),
+                    )?;
+                    iter.next()?;
+                    sst_concat_iters.push(Box::new(iter));
+                }
+                Bound::Unbounded => {
+                    let iter = SstConcatIterator::create_and_seek_to_first(sstables)?;
+                    sst_concat_iters.push(Box::new(iter));
+                }
+            }
+        }
+        let iter3 = MergeIterator::create(sst_concat_iters);
         Ok(FusedIterator::new(LsmIterator::new(
-            TwoMergeIterator::create(iter1, iter2)?,
+            TwoMergeIterator::create(TwoMergeIterator::create(iter1, iter2)?, iter3)?,
             upper,
         )?))
     }
