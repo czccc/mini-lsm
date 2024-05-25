@@ -90,9 +90,9 @@ impl LeveledCompactionController {
             }
         }
 
-        println!(
-            "base_level: {base_level}, target_size: {target_size:?}, real_size: {real_sizes:?}"
-        );
+        // println!(
+        //     "base_level: {base_level}, target_size: {target_size:?}, real_size: {real_sizes:?}"
+        // );
 
         // 2. Decide Level Priorities
         // 2.1 check l0_sstables size with highest priorities

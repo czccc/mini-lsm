@@ -18,6 +18,7 @@ pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredComp
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::StorageIterator;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -191,7 +192,7 @@ impl LsmStorageInner {
         };
         let new_ssts = self.compact(&task)?;
         {
-            let _state_lock = self.state_lock.lock();
+            let state_lock = self.state_lock.lock();
             let mut guard = self.state.write();
             let mut state = guard.as_ref().clone();
             state.l0_sstables = state
@@ -209,6 +210,14 @@ impl LsmStorageInner {
             for sst in new_ssts {
                 state.sstables.insert(sst.sst_id(), sst);
             }
+
+            self.manifest.as_ref().map(|manifest| {
+                manifest.add_record(
+                    &state_lock,
+                    ManifestRecord::Compaction(task, state.levels[0].1.clone()),
+                )
+            });
+
             *guard = Arc::new(state);
         };
         Ok(())
@@ -235,7 +244,7 @@ impl LsmStorageInner {
             let new_sstables = self.compact(&task)?;
             let new_sst_ids: Vec<usize> = new_sstables.iter().map(|x| x.sst_id()).collect();
 
-            let _state_lock = self.state_lock.lock();
+            let state_lock = self.state_lock.lock();
             let mut guard = self.state.write();
             let mut snapshot = (*guard.as_ref()).clone();
 
@@ -254,6 +263,10 @@ impl LsmStorageInner {
                 }
             }
             *guard = Arc::new(new_state);
+
+            self.manifest.as_ref().map(|manifest| {
+                manifest.add_record(&state_lock, ManifestRecord::Compaction(task, new_sst_ids))
+            });
         }
 
         Ok(())
@@ -303,7 +316,9 @@ impl LsmStorageInner {
                     recv(ticker) -> _ => if let Err(e) = this.trigger_flush() {
                         eprintln!("flush failed: {}", e);
                     },
-                    recv(rx) -> _ => return
+                    recv(rx) -> _ => {
+                        return
+                    }
                 }
             }
         });
