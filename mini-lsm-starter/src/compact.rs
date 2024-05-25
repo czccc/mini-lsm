@@ -112,7 +112,16 @@ impl LsmStorageInner {
     fn compact(&self, task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
         let mut multi_level_sst_ids = Vec::new();
         match task {
-            CompactionTask::Leveled(_) => todo!(),
+            CompactionTask::Leveled(task) => {
+                if task.upper_level.is_none() {
+                    for sst_id in &task.upper_level_sst_ids {
+                        multi_level_sst_ids.push(vec![*sst_id]);
+                    }
+                } else {
+                    multi_level_sst_ids.push(task.upper_level_sst_ids.clone());
+                }
+                multi_level_sst_ids.push(task.lower_level_sst_ids.clone());
+            }
             CompactionTask::Tiered(task) => {
                 for (_id, sst_ids) in &task.tiers {
                     multi_level_sst_ids.push(sst_ids.clone());
@@ -228,7 +237,11 @@ impl LsmStorageInner {
 
             let _state_lock = self.state_lock.lock();
             let mut guard = self.state.write();
-            let snapshot = (*guard).clone();
+            let mut snapshot = (*guard.as_ref()).clone();
+
+            for sst in new_sstables {
+                snapshot.sstables.insert(sst.sst_id(), sst);
+            }
 
             let (mut new_state, old_sst_ids) =
                 controller.apply_compaction_result(&snapshot, &task, &new_sst_ids);
@@ -239,9 +252,6 @@ impl LsmStorageInner {
                 if let Some(sst) = new_state.sstables.remove(sst_id) {
                     std::fs::remove_file(self.path_of_sst(sst.sst_id()))?
                 }
-            }
-            for sst in new_sstables {
-                new_state.sstables.insert(sst.sst_id(), sst);
             }
             *guard = Arc::new(new_state);
         }
