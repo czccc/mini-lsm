@@ -292,35 +292,53 @@ impl LsmStorageInner {
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let guard = self.state.read();
-        if let Some(x) = [guard.memtable.clone()]
+
+        for memtable in [guard.memtable.clone()]
             .iter()
             .chain(guard.imm_memtables.iter())
-            .find_map(|memtable| memtable.get(key))
-            .map(|value| if value.is_empty() { None } else { Some(value) })
         {
-            Ok(x)
-        } else {
-            Ok([(0, guard.l0_sstables.as_slice())]
-                .into_iter()
-                .chain(guard.levels.iter().map(|x| (x.0, x.1.as_slice())))
-                .flat_map(|(_level, ids)| ids)
-                .filter_map(|id| guard.sstables.get(id))
-                .filter(|sstable| sstable.contains_key(key))
-                .find_map(|sstable| {
-                    let block_iter = BlockIterator::create_and_seek_to_key(
-                        sstable
-                            .read_block(sstable.find_block_idx(KeySlice::from_slice(key)))
-                            .ok()?,
-                        KeySlice::from_slice(key),
-                    );
-                    if block_iter.is_valid() {
-                        Some(Bytes::copy_from_slice(block_iter.value()))
-                    } else {
-                        None
-                    }
-                })
-                .and_then(|value| if value.is_empty() { None } else { Some(value) }))
+            match memtable.get(key) {
+                Some(value) if value.is_empty() => return Ok(None),
+                Some(value) => return Ok(Some(value)),
+                None => {}
+            }
         }
+
+        for sst_id in &guard.l0_sstables {
+            let sstable = guard.sstables.get(sst_id).expect("Use Invalid Sstable");
+            if !sstable.contains_key(key) {
+                continue;
+            }
+            let block_iter = BlockIterator::create_and_seek_to_key(
+                sstable.read_block(sstable.find_block_idx(KeySlice::from_slice(key)))?,
+                KeySlice::from_slice(key),
+            );
+            if block_iter.is_valid() {
+                if block_iter.value().is_empty() {
+                    return Ok(None);
+                } else {
+                    return Ok(Some(Bytes::copy_from_slice(block_iter.value())));
+                }
+            }
+        }
+
+        for (_, sst_ids) in &guard.levels {
+            for sst_id in sst_ids {
+                let sstable = guard.sstables.get(sst_id).unwrap().clone();
+                if !sstable.contains_key(key) {
+                    continue;
+                }
+                let block_iter = BlockIterator::create_and_seek_to_key(
+                    sstable.read_block(sstable.find_block_idx(KeySlice::from_slice(key)))?,
+                    KeySlice::from_slice(key),
+                );
+                if block_iter.is_valid() {
+                    return Ok(Some(Bytes::copy_from_slice(block_iter.value())));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -423,7 +441,7 @@ impl LsmStorageInner {
         upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
         let guard = self.state.read();
-        let iter1 = MergeIterator::create(
+        let memtable_iter = MergeIterator::create(
             [guard.memtable.clone()]
                 .iter()
                 .chain(guard.imm_memtables.iter())
@@ -431,10 +449,9 @@ impl LsmStorageInner {
                 .map(Box::new)
                 .collect(),
         );
-        let iter2 = MergeIterator::create(
+        let l0_sstable_iter = MergeIterator::create(
             [(0, guard.l0_sstables.as_slice())]
                 .into_iter()
-                .chain(guard.levels.iter().map(|x| (x.0, x.1.as_slice())))
                 .flat_map(|(_level, ids)| ids.iter().map(|id| guard.sstables.get(id).unwrap()))
                 .filter(|x| x.contains_range(lower, upper))
                 .map(|x| -> Result<SsTableIterator> {
@@ -487,9 +504,12 @@ impl LsmStorageInner {
                 }
             }
         }
-        let iter3 = MergeIterator::create(sst_concat_iters);
+        let level_iter = MergeIterator::create(sst_concat_iters);
         Ok(FusedIterator::new(LsmIterator::new(
-            TwoMergeIterator::create(TwoMergeIterator::create(iter1, iter2)?, iter3)?,
+            TwoMergeIterator::create(
+                TwoMergeIterator::create(memtable_iter, l0_sstable_iter)?,
+                level_iter,
+            )?,
             upper,
         )?))
     }
