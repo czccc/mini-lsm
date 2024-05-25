@@ -47,13 +47,6 @@ impl SimpleLeveledCompactionController {
 
             if level == 0 && upper_sst_ids.len() >= self.options.level0_file_num_compaction_trigger
             {
-                println!(
-                    "compaction triggered at level {} and {} with level0 size {}, level_sst_ids {:?}",
-                    level,
-                    level + 1,
-                    self.options.level0_file_num_compaction_trigger,
-                    level_sst_ids
-                );
                 return Some(SimpleLeveledCompactionTask {
                     upper_level: None,
                     upper_level_sst_ids: upper_sst_ids.clone(),
@@ -67,13 +60,6 @@ impl SimpleLeveledCompactionController {
                 && 100.0 * (lower_sst_ids.len() as f64) / (upper_sst_ids.len() as f64)
                     < (self.options.size_ratio_percent as f64)
             {
-                println!(
-                    "compaction triggered at level {} and {} with ratio {}, level_sst_ids {:?}",
-                    level,
-                    level + 1,
-                    100.0 * (lower_sst_ids.len() as f64) / (upper_sst_ids.len() as f64),
-                    level_sst_ids
-                );
                 return Some(SimpleLeveledCompactionTask {
                     upper_level: Some(level),
                     upper_level_sst_ids: upper_sst_ids.clone(),
