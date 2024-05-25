@@ -84,4 +84,11 @@ impl<
         self.update_use();
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        let mut count = 0;
+        count += self.a.num_active_iterators();
+        count += self.b.num_active_iterators();
+        count
+    }
 }

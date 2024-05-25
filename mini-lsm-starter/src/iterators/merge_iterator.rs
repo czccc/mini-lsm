@@ -101,4 +101,16 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         self.current = self.iters.pop().map(|x| HeapWrapper(x.0, x.1));
         Ok(())
     }
+
+    fn num_active_iterators(&self) -> usize {
+        let mut count = 0;
+        count += self
+            .current
+            .as_ref()
+            .map_or(0, |x| x.1.num_active_iterators());
+        for x in &self.iters {
+            count += x.1.num_active_iterators();
+        }
+        count
+    }
 }

@@ -5,6 +5,7 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
+use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -240,5 +241,32 @@ impl SsTable {
 
     pub fn max_ts(&self) -> u64 {
         self.max_ts
+    }
+
+    pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
+        self.first_key.as_key_slice() <= KeySlice::from_slice(key)
+            && KeySlice::from_slice(key) <= self.last_key.as_key_slice()
+    }
+
+    pub(crate) fn contains_range(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
+        match upper {
+            Bound::Excluded(key) if key <= self.first_key().as_key_slice().into_inner() => {
+                return false;
+            }
+            Bound::Included(key) if key < self.first_key().as_key_slice().into_inner() => {
+                return false;
+            }
+            _ => {}
+        }
+        match lower {
+            Bound::Excluded(key) if key >= self.last_key().as_key_slice().into_inner() => {
+                return false;
+            }
+            Bound::Included(key) if key > self.last_key().as_key_slice().into_inner() => {
+                return false;
+            }
+            _ => {}
+        }
+        true
     }
 }
