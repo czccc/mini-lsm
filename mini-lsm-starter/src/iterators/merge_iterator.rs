@@ -1,10 +1,7 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::cmp::{self};
 use std::collections::BinaryHeap;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 
 use crate::key::KeySlice;
 
@@ -47,7 +44,14 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut iters: BinaryHeap<HeapWrapper<I>> = iters
+            .into_iter()
+            .filter(|x| x.is_valid())
+            .enumerate()
+            .map(|(id, x)| HeapWrapper(id, x))
+            .collect();
+        let current = iters.pop().map(|x| HeapWrapper(x.0, x.1));
+        Self { iters, current }
     }
 }
 
@@ -57,18 +61,44 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current
+            .as_ref()
+            .map_or(KeySlice::default(), |x| x.1.key())
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().map_or(b"", |x| x.1.value())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.as_ref().map_or(false, |x| x.1.is_valid())
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.current.is_none() {
+            return Ok(());
+        }
+
+        let key = self.current.as_ref().unwrap().1.key();
+        while let Some(mut iter) = self.iters.pop().map(|x| HeapWrapper(x.0, x.1)) {
+            if iter.1.key() <= key {
+                iter.1.next()?;
+                if iter.1.is_valid() {
+                    self.iters.push(iter);
+                }
+            } else {
+                if iter.1.is_valid() {
+                    self.iters.push(iter);
+                }
+                break;
+            }
+        }
+
+        self.current.as_mut().unwrap().1.next()?;
+        if self.current.as_mut().unwrap().1.is_valid() {
+            self.iters.push(self.current.take().unwrap());
+        }
+        self.current = self.iters.pop().map(|x| HeapWrapper(x.0, x.1));
+        Ok(())
     }
 }
