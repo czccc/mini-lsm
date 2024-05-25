@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{fs::File, io::Seek};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use bytes::{Buf, BufMut};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
@@ -37,13 +38,22 @@ impl Manifest {
     pub fn recover(path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
         let mut file = File::options().read(true).write(true).open(path.as_ref())?;
         file.seek(std::io::SeekFrom::Start(0))?;
-        let mut buf = String::new();
-        file.read_to_string(&mut buf)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let mut buf: &[u8] = buf.as_ref();
 
         let mut records = Vec::new();
+        while buf.has_remaining() {
+            let record_len = buf.get_u32();
 
-        for record in serde_json::Deserializer::from_slice(buf.as_ref()).into_iter() {
-            records.push(record?);
+            let record_buf = buf.get(..record_len as usize).unwrap();
+            buf.advance(record_len as usize);
+            let checksum = buf.get_u32();
+            if checksum != crc32fast::hash(record_buf) {
+                return Err(anyhow!("checksum invalid!"));
+            }
+
+            records.push(serde_json::from_slice(record_buf)?);
         }
 
         let manifest = Self {
@@ -64,7 +74,14 @@ impl Manifest {
         let mut file = self.file.lock();
         file.sync_all()?;
         file.seek(std::io::SeekFrom::End(0))?;
-        let buf = serde_json::to_string(&record)?;
+
+        let record_buf = serde_json::to_vec(&record)?;
+
+        let mut buf = Vec::new();
+        buf.put_u32(record_buf.len() as u32);
+        buf.put(record_buf.as_ref());
+        buf.put_u32(crc32fast::hash(&record_buf));
+
         file.write_all(buf.as_ref())?;
         file.flush()?;
         file.sync_all()?;

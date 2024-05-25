@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::BufMut;
+use crc32fast;
 
 use super::{BlockMeta, SsTable};
 use crate::{
@@ -51,7 +52,12 @@ impl SsTableBuilder {
                 last_key: KeyBytes::from_bytes(last_key.into()),
             });
             let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
-            self.data.put(builder.build().encode());
+
+            let block_data = builder.build().encode();
+            let checksum = crc32fast::hash(block_data.as_ref());
+            self.data.put(block_data);
+            self.data.put_u32(checksum);
+
             let _ = self.builder.add(key, value);
         }
         if self.first_key.is_empty() {
@@ -82,18 +88,29 @@ impl SsTableBuilder {
             first_key: KeyBytes::from_bytes(self.first_key.into()),
             last_key: KeyBytes::from_bytes(self.last_key.into()),
         });
-        self.data.put(self.builder.build().encode());
 
+        let block_data = self.builder.build().encode();
+        let checksum = crc32fast::hash(block_data.as_ref());
+        self.data.put(block_data);
+        self.data.put_u32(checksum);
+
+        let mut meta_buf = Vec::new();
         let block_meta_offset = self.data.len();
-        BlockMeta::encode_block_meta(self.meta.as_slice(), &mut self.data);
-        self.data
-            .put_u32((self.data.len() - block_meta_offset) as u32);
+        BlockMeta::encode_block_meta(self.meta.as_slice(), &mut meta_buf);
+        self.data.put(meta_buf.as_ref());
+        self.data.put_u32(crc32fast::hash(meta_buf.as_ref()));
         self.data.put_u32(block_meta_offset as u32);
 
         let bloom_filter_offset = self.data.len();
+
+        let mut bloom_filter_buf = Vec::new();
         let bits_per_key = Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01);
         let bloom = Bloom::build_from_key_hashes(&self.key_hashes, bits_per_key);
-        bloom.encode(&mut self.data);
+        bloom.encode(&mut bloom_filter_buf);
+
+        self.data.put(bloom_filter_buf.as_ref());
+        self.data
+            .put_u32(crc32fast::hash(bloom_filter_buf.as_ref()));
         self.data.put_u32(bloom_filter_offset as u32);
 
         let file = FileObject::create(path.as_ref(), self.data)?;

@@ -130,27 +130,43 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        let bloom_filter_offset = file.read(file.1 - 4, 4)?.as_slice().get_u32();
-        let bloom = Bloom::decode(
-            file.read(
-                bloom_filter_offset as u64,
-                file.1 - 4 - (bloom_filter_offset) as u64,
-            )?
-            .as_slice(),
-        )?;
+        let (bloom_filter_offset, bloom) = {
+            let bloom_filter_offset = file.read(file.1 - 4, 4)?.as_slice().get_u32();
+            let bloom_filter_size = file.1 - 4 - (bloom_filter_offset) as u64;
+            let bloom_filter_buf = file.read(bloom_filter_offset as u64, bloom_filter_size)?;
+            let mut bloom_filter_buf: &[u8] = bloom_filter_buf.as_ref();
+            let bloom_buf = bloom_filter_buf[..(bloom_filter_size - 4) as usize].as_ref();
+            bloom_filter_buf.advance((bloom_filter_size - 4) as usize);
+            let bloom_filter_checksum = bloom_filter_buf.get_u32();
+            if bloom_filter_checksum != crc32fast::hash(bloom_buf) {
+                return Err(anyhow!("checksum invalid!"));
+            }
+            let bloom = Bloom::decode(bloom_buf)?;
+            (bloom_filter_offset, bloom)
+        };
 
-        let block_meta_offset = file
-            .read((bloom_filter_offset - 4) as u64, 4)?
-            .as_slice()
-            .get_u32();
-        let block_meta_size = file
-            .read((bloom_filter_offset - 8) as u64, 4)?
-            .as_slice()
-            .get_u32();
-        let block_meta = BlockMeta::decode_block_meta(
-            file.read(block_meta_offset as u64, block_meta_size as u64)?
-                .as_slice(),
-        );
+        let (block_meta_offset, block_meta) = {
+            let block_meta_offset = file
+                .read((bloom_filter_offset - 4) as u64, 4)?
+                .as_slice()
+                .get_u32();
+            let block_meta_size = (bloom_filter_offset - 4 - block_meta_offset) as u64;
+            let block_meta_buf = file.read(block_meta_offset as u64, block_meta_size)?;
+            let mut block_meta_buf: &[u8] = block_meta_buf.as_ref();
+
+            let meta_buf = block_meta_buf[..(block_meta_size - 4) as usize].as_ref();
+            block_meta_buf.advance((block_meta_size - 4) as usize);
+            let block_meta_checksum = block_meta_buf.get_u32();
+            if block_meta_checksum != crc32fast::hash(meta_buf) {
+                return Err(anyhow!("checksum invalid!"));
+            }
+            let block_meta = BlockMeta::decode_block_meta(
+                file.read(block_meta_offset as u64, block_meta_size)?
+                    .as_slice(),
+            );
+
+            (block_meta_offset, block_meta)
+        };
 
         let first_key = block_meta
             .first()
@@ -200,11 +216,19 @@ impl SsTable {
             .block_meta
             .get(block_idx + 1)
             .map_or(self.block_meta_offset, |x| x.offset);
-        Ok(Arc::new(Block::decode(
-            self.file
-                .read(offset as u64, (next_offset - offset) as u64)?
-                .as_slice(),
-        )))
+
+        let block_size = next_offset - offset;
+        let block_data_with_checksum = self.file.read(offset as u64, block_size as u64)?;
+        let mut block_data_with_checksum = block_data_with_checksum.as_slice();
+        let block_data = block_data_with_checksum[..block_size - 4].as_ref();
+
+        block_data_with_checksum.advance(block_size - 4);
+        let checksum = block_data_with_checksum.get_u32();
+        if checksum != crc32fast::hash(block_data) {
+            return Err(anyhow!("checksum invalid!"));
+        }
+
+        Ok(Arc::new(Block::decode(block_data)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

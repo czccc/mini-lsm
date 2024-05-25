@@ -7,7 +7,7 @@ use std::io::{BufWriter, Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
@@ -34,15 +34,23 @@ impl Wal {
 
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
-        let mut buf = Bytes::from(buf);
+        let mut buf: &[u8] = buf.as_ref();
 
         while buf.has_remaining() {
+            let buf_start = buf;
             let key_len = buf.get_u32();
             let key = Bytes::copy_from_slice(buf.get(..(key_len as usize)).unwrap());
             buf.advance(key_len as usize);
             let value_len = buf.get_u32();
             let value = Bytes::copy_from_slice(buf.get(..(value_len as usize)).unwrap());
             buf.advance(value_len as usize);
+            let checksum = buf.get_u32();
+
+            if checksum
+                != crc32fast::hash(buf_start.get(..(key_len + value_len + 8) as usize).unwrap())
+            {
+                return Err(anyhow!("checksum invalid!"));
+            }
             skiplist.insert(key, value);
         }
 
@@ -57,7 +65,10 @@ impl Wal {
         buf.put(key);
         buf.put_u32(value.len() as u32);
         buf.put(value);
-        self.file.lock().write_all(buf.freeze().as_ref())?;
+        // let buf = buf.freeze();
+        let checksum = crc32fast::hash(buf.as_ref());
+        buf.put_u32(checksum);
+        self.file.lock().write_all(buf.as_ref())?;
         Ok(())
     }
 
