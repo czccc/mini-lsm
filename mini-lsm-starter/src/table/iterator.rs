@@ -20,7 +20,7 @@ impl SsTableIterator {
         if table.block_meta.is_empty() {
             return Err(anyhow!("No data in SsTable!"));
         }
-        let block = table.read_block(0)?;
+        let block = table.read_block_cached(0)?;
         let iter = SsTableIterator {
             table,
             blk_iter: BlockIterator::create_and_seek_to_first(block),
@@ -34,7 +34,7 @@ impl SsTableIterator {
         if self.table.block_meta.is_empty() {
             return Err(anyhow!("No data in SsTable!"));
         }
-        let block = self.table.read_block(0)?;
+        let block = self.table.read_block_cached(0)?;
         self.blk_iter = BlockIterator::create_and_seek_to_first(block);
         self.blk_idx = 0;
         Ok(())
@@ -43,7 +43,7 @@ impl SsTableIterator {
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
     pub fn create_and_seek_to_key(table: Arc<SsTable>, key: KeySlice) -> Result<Self> {
         let block_idx = table.find_block_idx(key);
-        let block = table.read_block(block_idx)?;
+        let block = table.read_block_cached(block_idx)?;
         let iter = SsTableIterator {
             table,
             blk_iter: BlockIterator::create_and_seek_to_key(block, key),
@@ -57,7 +57,7 @@ impl SsTableIterator {
     /// this function.
     pub fn seek_to_key(&mut self, key: KeySlice) -> Result<()> {
         let block_idx = self.table.find_block_idx(key);
-        let block = self.table.read_block(block_idx)?;
+        let block = self.table.read_block_cached(block_idx)?;
         self.blk_iter = BlockIterator::create_and_seek_to_key(block, key);
         self.blk_idx = block_idx;
         Ok(())
@@ -91,7 +91,7 @@ impl StorageIterator for SsTableIterator {
             if self.blk_idx >= self.table.block_meta.len() {
                 return Ok(());
             }
-            let block = self.table.read_block(self.blk_idx)?;
+            let block = self.table.read_block_cached(self.blk_idx)?;
             self.blk_iter = BlockIterator::create_and_seek_to_first(block);
         }
         Ok(())

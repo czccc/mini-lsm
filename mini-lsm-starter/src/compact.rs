@@ -174,7 +174,11 @@ impl LsmStorageInner {
         let mut new_sstables = Vec::new();
         for builder in builders {
             let sst_id = self.next_sst_id();
-            let sstable = builder.build(sst_id, None, self.path_of_sst(sst_id))?;
+            let sstable = builder.build(
+                sst_id,
+                Some(self.block_cache.clone()),
+                self.path_of_sst(sst_id),
+            )?;
             new_sstables.push(Arc::new(sstable));
         }
 

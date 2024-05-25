@@ -103,6 +103,9 @@ impl MemTable {
         );
         self.map
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
+        if let Some(ref wal) = self.wal {
+            wal.put(key, value)?;
+        }
         Ok(())
     }
 

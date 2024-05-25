@@ -214,7 +214,7 @@ impl SsTable {
                 .try_get_with((self.id, block_idx), || self.read_block(block_idx))
                 .map_err(|e| anyhow!("{}", e))
         } else {
-            Err(anyhow!("No block_cache provided"))
+            self.read_block(block_idx)
         }
     }
 
