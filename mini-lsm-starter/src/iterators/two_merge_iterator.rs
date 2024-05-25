@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::Result;
 
 use super::StorageIterator;
@@ -11,6 +8,7 @@ pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
     // Add fields as need
+    use_a: bool,
 }
 
 impl<
@@ -19,7 +17,28 @@ impl<
     > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let mut iter = Self { a, b, use_a: true };
+        iter.update_use();
+        Ok(iter)
+    }
+
+    fn skip_same(&mut self) -> Result<()> {
+        if self.a.is_valid() && self.b.is_valid() && self.b.key() == self.a.key() {
+            if self.use_a {
+                self.b.next()?;
+            } else {
+                self.a.next()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn update_use(&mut self) {
+        if self.a.is_valid() && self.b.is_valid() {
+            self.use_a = self.a.key() <= self.b.key();
+        } else {
+            self.use_a = self.a.is_valid();
+        }
     }
 }
 
@@ -31,18 +50,38 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.use_a {
+            self.a.key()
+        } else {
+            self.b.key()
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.use_a {
+            self.a.value()
+        } else {
+            self.b.value()
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        if self.use_a {
+            self.a.is_valid()
+        } else {
+            self.b.is_valid()
+        }
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.use_a {
+            self.skip_same()?;
+            self.a.next()?;
+        } else {
+            self.skip_same()?;
+            self.b.next()?;
+        }
+        self.update_use();
+        Ok(())
     }
 }

@@ -1,23 +1,44 @@
+use std::ops::Bound;
+
 use anyhow::Result;
+use bytes::Bytes;
 
 use crate::{
-    iterators::{merge_iterator::MergeIterator, StorageIterator},
+    iterators::{
+        merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
+    },
+    key::{KeyBytes, KeySlice},
     mem_table::MemTableIterator,
+    table::SsTableIterator,
 };
 
 /// Represents the internal type for an LSM iterator. This type will be changed across the tutorial for multiple times.
-type LsmIteratorInner = MergeIterator<MemTableIterator>;
+type LsmIteratorInner =
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    upper: Bound<KeyBytes>,
+}
+
+/// Create a bound of `Bytes` from a bound of `&[u8]`.
+pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<KeyBytes> {
+    match bound {
+        Bound::Included(x) => Bound::Included(KeyBytes::from_bytes(Bytes::copy_from_slice(x))),
+        Bound::Excluded(x) => Bound::Excluded(KeyBytes::from_bytes(Bytes::copy_from_slice(x))),
+        Bound::Unbounded => Bound::Unbounded,
+    }
 }
 
 impl LsmIterator {
-    pub(crate) fn new(mut iter: LsmIteratorInner) -> Result<Self> {
+    pub(crate) fn new(mut iter: LsmIteratorInner, upper: Bound<&[u8]>) -> Result<Self> {
         while iter.is_valid() && iter.value().is_empty() {
             iter.next()?;
         }
-        Ok(Self { inner: iter })
+        Ok(Self {
+            inner: iter,
+            upper: map_bound(upper),
+        })
     }
 }
 
@@ -26,6 +47,11 @@ impl StorageIterator for LsmIterator {
 
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
+            && match &self.upper {
+                Bound::Included(key) => KeySlice::from_slice(self.key()) <= key.as_key_slice(),
+                Bound::Excluded(key) => KeySlice::from_slice(self.key()) < key.as_key_slice(),
+                Bound::Unbounded => true,
+            }
     }
 
     fn key(&self) -> &[u8] {

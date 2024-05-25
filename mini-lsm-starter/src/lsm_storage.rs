@@ -10,17 +10,20 @@ use anyhow::Result;
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
-use crate::block::Block;
+use crate::block::{Block, BlockIterator};
 use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
+use crate::iterators::StorageIterator;
+use crate::key::KeySlice;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
 use crate::mvcc::LsmMvccInner;
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -280,13 +283,41 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        let key = KeySlice::from_slice(key);
         let guard = self.state.read();
-        let value = [guard.memtable.clone()]
+        if let Some(x) = [guard.memtable.clone()]
             .iter()
             .chain(guard.imm_memtables.iter())
-            .find_map(|memtable| memtable.get(key))
-            .and_then(|value| if value.is_empty() { None } else { Some(value) });
-        Ok(value)
+            .find_map(|memtable| memtable.get(key.into_inner()))
+            .map(|value| if value.is_empty() { None } else { Some(value) })
+        {
+            Ok(x)
+        } else {
+            Ok([(0, guard.l0_sstables.as_slice())]
+                .into_iter()
+                .chain(guard.levels.iter().map(|x| (x.0, x.1.as_slice())))
+                .flat_map(|(_level, ids)| ids)
+                .find_map(|id| {
+                    guard.sstables.get(id).and_then(|sstable| {
+                        if sstable.first_key().as_key_slice() <= key
+                            && key <= sstable.last_key().as_key_slice()
+                        {
+                            let block_iter = BlockIterator::create_and_seek_to_key(
+                                sstable.read_block(sstable.find_block_idx(key)).ok()?,
+                                key,
+                            );
+                            if block_iter.is_valid() {
+                                Some(Bytes::copy_from_slice(block_iter.value()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .and_then(|value| if value.is_empty() { None } else { Some(value) }))
+        }
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -365,13 +396,43 @@ impl LsmStorageInner {
         upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
         let guard = self.state.read();
-        let iter = [guard.memtable.clone()]
-            .iter()
-            .chain(guard.imm_memtables.iter())
-            .map(|x| Box::new(x.scan(lower, upper)))
-            .collect();
+        let iter1 = MergeIterator::create(
+            [guard.memtable.clone()]
+                .iter()
+                .chain(guard.imm_memtables.iter())
+                .map(|x| Box::new(x.scan(lower, upper)))
+                .collect(),
+        );
+        let iter2 = MergeIterator::create(
+            [(0, guard.l0_sstables.as_slice())]
+                .into_iter()
+                .chain(guard.levels.iter().map(|x| (x.0, x.1.as_slice())))
+                .flat_map(|(_level, ids)| ids.iter().map(|id| guard.sstables.get(id).unwrap()))
+                .map(|x| -> Result<SsTableIterator> {
+                    match lower {
+                        Bound::Included(key) => {
+                            let mut iter = SsTableIterator::create_and_seek_to_first(x.clone())?;
+                            iter.seek_to_key(KeySlice::from_slice(key))?;
+                            Ok(iter)
+                        }
+                        Bound::Excluded(key) => {
+                            let mut iter = SsTableIterator::create_and_seek_to_first(x.clone())?;
+                            iter.seek_to_key(KeySlice::from_slice(key))?;
+                            iter.next()?;
+                            Ok(iter)
+                        }
+                        Bound::Unbounded => {
+                            let iter = SsTableIterator::create_and_seek_to_first(x.clone())?;
+                            Ok(iter)
+                        }
+                    }
+                })
+                .map(|x| Box::new(x.unwrap()))
+                .collect(),
+        );
         Ok(FusedIterator::new(LsmIterator::new(
-            MergeIterator::create(iter),
+            TwoMergeIterator::create(iter1, iter2)?,
+            upper,
         )?))
     }
 }
