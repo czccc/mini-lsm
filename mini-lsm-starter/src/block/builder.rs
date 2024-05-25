@@ -36,14 +36,27 @@ impl BlockBuilder {
         {
             return false;
         }
+
         self.offsets.push(self.data.len() as u16);
-        self.data.put_u16(key.len() as u16);
-        self.data.put(key.into_inner());
-        self.data.put_u16(value.len() as u16);
-        self.data.put(value);
         if self.first_key.is_empty() {
             self.first_key.append(key.into_inner());
+            self.data.put_u16((key.len()) as u16);
+            self.data.put(key.raw_ref());
+        } else {
+            let mut overlap_len = 0;
+            for i in 0..key.len().min(self.first_key.len()) {
+                if key.raw_ref()[i] == self.first_key.raw_ref()[i] {
+                    overlap_len += 1;
+                } else {
+                    break;
+                }
+            }
+            self.data.put_u16(overlap_len as u16);
+            self.data.put_u16((key.len() - overlap_len) as u16);
+            self.data.put(&key.raw_ref()[overlap_len..]);
         }
+        self.data.put_u16(value.len() as u16);
+        self.data.put(value);
         true
     }
 

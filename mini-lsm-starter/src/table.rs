@@ -39,7 +39,7 @@ impl BlockMeta {
         for meta in block_meta {
             size += 8 + meta.first_key.len() + meta.last_key.len();
         }
-        buf.reserve(buf.len() + size);
+        buf.reserve(size);
         buf.put_u32(block_meta.len() as u32);
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
@@ -130,29 +130,44 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        let block_meta_offset = file.read(file.1 - 4, 4)?.as_slice().get_u32() as usize;
-        let block_meta = BlockMeta::decode_block_meta(
+        let bloom_filter_offset = file.read(file.1 - 4, 4)?.as_slice().get_u32();
+        let bloom = Bloom::decode(
             file.read(
-                block_meta_offset as u64,
-                file.1 - 4 - (block_meta_offset as u64),
+                bloom_filter_offset as u64,
+                file.1 - 4 - (bloom_filter_offset) as u64,
             )?
             .as_slice(),
+        )?;
+
+        let block_meta_offset = file
+            .read((bloom_filter_offset - 4) as u64, 4)?
+            .as_slice()
+            .get_u32();
+        let block_meta_size = file
+            .read((bloom_filter_offset - 8) as u64, 4)?
+            .as_slice()
+            .get_u32();
+        let block_meta = BlockMeta::decode_block_meta(
+            file.read(block_meta_offset as u64, block_meta_size as u64)?
+                .as_slice(),
         );
+
         let first_key = block_meta
             .first()
             .map_or(KeyBytes::default(), |x| x.first_key.clone());
         let last_key = block_meta
             .last()
             .map_or(KeyBytes::default(), |x| x.last_key.clone());
+
         let ss_table = Self {
             file,
             block_meta,
-            block_meta_offset,
+            block_meta_offset: block_meta_offset as usize,
             id,
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         };
         Ok(ss_table)
@@ -246,6 +261,10 @@ impl SsTable {
     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
         self.first_key.as_key_slice() <= KeySlice::from_slice(key)
             && KeySlice::from_slice(key) <= self.last_key.as_key_slice()
+            && self
+                .bloom
+                .as_ref()
+                .is_some_and(|bloom| bloom.may_contain(farmhash::fingerprint32(key)))
     }
 
     pub(crate) fn contains_range(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {

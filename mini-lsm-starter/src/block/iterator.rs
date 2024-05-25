@@ -41,6 +41,7 @@ impl BlockIterator {
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
         let mut iter = Self::new(block);
+        iter.seek_to_first();
         iter.seek_to_key(key);
         iter
     }
@@ -89,11 +90,16 @@ impl BlockIterator {
         let offset = self.block.offsets[self.idx] as usize;
         let mut entry = self.block.data.as_slice();
         entry.advance(offset);
-        let key_len = entry.get_u16() as usize;
-        self.key.append(&entry[0..key_len]);
-        entry.advance(key_len);
+        let overlap_len = entry.get_u16() as usize;
+        let keyrest_len = entry.get_u16() as usize;
+        self.key.append(&self.first_key.raw_ref()[0..overlap_len]);
+        self.key.append(&entry[0..keyrest_len]);
+        entry.advance(keyrest_len);
         let value_len = entry.get_u16() as usize;
-        self.value_range = (offset + key_len + 4, offset + key_len + value_len + 4);
+        self.value_range = (
+            offset + keyrest_len + 6,
+            offset + keyrest_len + value_len + 6,
+        );
     }
 
     /// Seek to the first key that >= `key`.
