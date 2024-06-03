@@ -15,7 +15,7 @@ use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
-use crate::key::{KeyBytes, KeySlice};
+use crate::key::{KeyBytes, KeySlice, TS_DEFAULT};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -37,16 +37,18 @@ impl BlockMeta {
     pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
         let mut size = 4;
         for meta in block_meta {
-            size += 8 + meta.first_key.len() + meta.last_key.len();
+            size += 8 + meta.first_key.raw_len() + meta.last_key.raw_len();
         }
         buf.reserve(size);
         buf.put_u32(block_meta.len() as u32);
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
-            buf.put_u16(meta.first_key.len() as u16);
+            buf.put_u16(meta.first_key.key_ref().len() as u16);
             buf.put(meta.first_key.as_key_slice().into_inner());
-            buf.put_u16(meta.last_key.len() as u16);
+            buf.put_u64(meta.first_key.ts());
+            buf.put_u16(meta.last_key.key_ref().len() as u16);
             buf.put(meta.last_key.as_key_slice().into_inner());
+            buf.put_u64(meta.last_key.ts());
         }
     }
 
@@ -57,9 +59,13 @@ impl BlockMeta {
         for _ in 0..block_meta_num {
             let offset = buf.get_u32() as usize;
             let first_key_len = buf.get_u16() as usize;
-            let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(first_key_len));
+            let first_key_data = buf.copy_to_bytes(first_key_len);
+            let first_key_ts = buf.get_u64();
+            let first_key = KeyBytes::from_bytes_with_ts(first_key_data, first_key_ts);
             let last_key_len = buf.get_u16() as usize;
-            let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(last_key_len));
+            let last_key_data = buf.copy_to_bytes(last_key_len);
+            let last_key_ts = buf.get_u64();
+            let last_key = KeyBytes::from_bytes_with_ts(last_key_data, last_key_ts);
             block_meta.push(BlockMeta {
                 offset,
                 first_key,
@@ -283,8 +289,8 @@ impl SsTable {
     }
 
     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
-        self.first_key.as_key_slice() <= KeySlice::from_slice(key)
-            && KeySlice::from_slice(key) <= self.last_key.as_key_slice()
+        self.first_key.as_key_slice() <= KeySlice::from_slice(key, TS_DEFAULT)
+            && KeySlice::from_slice(key, TS_DEFAULT) <= self.last_key.as_key_slice()
             && self
                 .bloom
                 .as_ref()
@@ -293,19 +299,27 @@ impl SsTable {
 
     pub(crate) fn contains_range(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
         match upper {
-            Bound::Excluded(key) if key <= self.first_key().as_key_slice().into_inner() => {
+            Bound::Excluded(key)
+                if KeySlice::from_slice(key, TS_DEFAULT) <= self.first_key().as_key_slice() =>
+            {
                 return false;
             }
-            Bound::Included(key) if key < self.first_key().as_key_slice().into_inner() => {
+            Bound::Included(key)
+                if KeySlice::from_slice(key, TS_DEFAULT) < self.first_key().as_key_slice() =>
+            {
                 return false;
             }
             _ => {}
         }
         match lower {
-            Bound::Excluded(key) if key >= self.last_key().as_key_slice().into_inner() => {
+            Bound::Excluded(key)
+                if KeySlice::from_slice(key, TS_DEFAULT) >= self.last_key().as_key_slice() =>
+            {
                 return false;
             }
-            Bound::Included(key) if key > self.last_key().as_key_slice().into_inner() => {
+            Bound::Included(key)
+                if KeySlice::from_slice(key, TS_DEFAULT) > self.last_key().as_key_slice() =>
+            {
                 return false;
             }
             _ => {}

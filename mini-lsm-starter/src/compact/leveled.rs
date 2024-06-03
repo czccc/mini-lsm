@@ -50,8 +50,8 @@ impl LeveledCompactionController {
             .iter()
             .filter(|sst_id| {
                 snapshot.sstables[sst_id].contains_range(
-                    Bound::Included(first_key.raw_ref()),
-                    Bound::Included(last_key.raw_ref()),
+                    Bound::Included(first_key.key_ref()),
+                    Bound::Included(last_key.key_ref()),
                 )
             })
             .copied()

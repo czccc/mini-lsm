@@ -70,8 +70,9 @@ impl BlockIterator {
         let key_len = entry.get_u16() as usize;
         self.key.append(&entry[0..key_len]);
         entry.advance(key_len);
+        self.key.set_ts(entry.get_u64());
         let value_len = entry.get_u16() as usize;
-        self.value_range = (key_len + 4, key_len + value_len + 4);
+        self.value_range = (key_len + 12, key_len + value_len + 12);
 
         self.first_key = self.key.clone();
     }
@@ -92,13 +93,14 @@ impl BlockIterator {
         entry.advance(offset);
         let overlap_len = entry.get_u16() as usize;
         let keyrest_len = entry.get_u16() as usize;
-        self.key.append(&self.first_key.raw_ref()[0..overlap_len]);
+        self.key.append(&self.first_key.key_ref()[0..overlap_len]);
         self.key.append(&entry[0..keyrest_len]);
         entry.advance(keyrest_len);
+        self.key.set_ts(entry.get_u64());
         let value_len = entry.get_u16() as usize;
         self.value_range = (
-            offset + keyrest_len + 6,
-            offset + keyrest_len + value_len + 6,
+            offset + keyrest_len + 14,
+            offset + keyrest_len + value_len + 14,
         );
     }
 

@@ -31,7 +31,7 @@ impl BlockBuilder {
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         let current_size = self.data.len() + self.offsets.len() * 2 + 2;
-        if current_size + key.len() + value.len() + 6 > self.block_size
+        if current_size + key.raw_len() + value.len() + 6 > self.block_size
             && !self.first_key.is_empty()
         {
             return false;
@@ -40,20 +40,22 @@ impl BlockBuilder {
         self.offsets.push(self.data.len() as u16);
         if self.first_key.is_empty() {
             self.first_key.append(key.into_inner());
-            self.data.put_u16((key.len()) as u16);
-            self.data.put(key.raw_ref());
+            self.data.put_u16((key.key_len()) as u16);
+            self.data.put(key.key_ref());
+            self.data.put_u64(key.ts());
         } else {
             let mut overlap_len = 0;
-            for i in 0..key.len().min(self.first_key.len()) {
-                if key.raw_ref()[i] == self.first_key.raw_ref()[i] {
+            for i in 0..key.key_len().min(self.first_key.key_len()) {
+                if key.key_ref()[i] == self.first_key.key_ref()[i] {
                     overlap_len += 1;
                 } else {
                     break;
                 }
             }
             self.data.put_u16(overlap_len as u16);
-            self.data.put_u16((key.len() - overlap_len) as u16);
-            self.data.put(&key.raw_ref()[overlap_len..]);
+            self.data.put_u16((key.key_len() - overlap_len) as u16);
+            self.data.put(&key.key_ref()[overlap_len..]);
+            self.data.put_u64(key.ts());
         }
         self.data.put_u16(value.len() as u16);
         self.data.put(value);

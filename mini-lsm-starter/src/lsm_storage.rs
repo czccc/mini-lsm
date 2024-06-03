@@ -20,7 +20,7 @@ use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{KeySlice, TS_DEFAULT};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::MemTable;
@@ -415,8 +415,9 @@ impl LsmStorageInner {
                 continue;
             }
             let block_iter = BlockIterator::create_and_seek_to_key(
-                sstable.read_block(sstable.find_block_idx(KeySlice::from_slice(key)))?,
-                KeySlice::from_slice(key),
+                sstable
+                    .read_block(sstable.find_block_idx(KeySlice::from_slice(key, TS_DEFAULT)))?,
+                KeySlice::from_slice(key, TS_DEFAULT),
             );
             if block_iter.is_valid() {
                 if block_iter.value().is_empty() {
@@ -434,8 +435,10 @@ impl LsmStorageInner {
                     continue;
                 }
                 let block_iter = BlockIterator::create_and_seek_to_key(
-                    sstable.read_block(sstable.find_block_idx(KeySlice::from_slice(key)))?,
-                    KeySlice::from_slice(key),
+                    sstable.read_block(
+                        sstable.find_block_idx(KeySlice::from_slice(key, TS_DEFAULT)),
+                    )?,
+                    KeySlice::from_slice(key, TS_DEFAULT),
                 );
                 if block_iter.is_valid() {
                     if block_iter.value().is_empty() {
@@ -602,12 +605,12 @@ impl LsmStorageInner {
                     match lower {
                         Bound::Included(key) => {
                             let mut iter = SsTableIterator::create_and_seek_to_first(x.clone())?;
-                            iter.seek_to_key(KeySlice::from_slice(key))?;
+                            iter.seek_to_key(KeySlice::from_slice(key, TS_DEFAULT))?;
                             Ok(iter)
                         }
                         Bound::Excluded(key) => {
                             let mut iter = SsTableIterator::create_and_seek_to_first(x.clone())?;
-                            iter.seek_to_key(KeySlice::from_slice(key))?;
+                            iter.seek_to_key(KeySlice::from_slice(key, TS_DEFAULT))?;
                             iter.next()?;
                             Ok(iter)
                         }
@@ -630,14 +633,14 @@ impl LsmStorageInner {
                 Bound::Included(key) => {
                     let iter = SstConcatIterator::create_and_seek_to_key(
                         sstables,
-                        KeySlice::from_slice(key),
+                        KeySlice::from_slice(key, TS_DEFAULT),
                     )?;
                     sst_concat_iters.push(Box::new(iter));
                 }
                 Bound::Excluded(key) => {
                     let mut iter = SstConcatIterator::create_and_seek_to_key(
                         sstables,
-                        KeySlice::from_slice(key),
+                        KeySlice::from_slice(key, TS_DEFAULT),
                     )?;
                     iter.next()?;
                     sst_concat_iters.push(Box::new(iter));
