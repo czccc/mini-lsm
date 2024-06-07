@@ -62,6 +62,7 @@ impl SsTableBuilder {
         }
         if self.first_key.0.is_empty() {
             self.first_key = (key.key_ref().to_vec(), key.ts());
+            // println!("id {:?}, key {:?}, value {:?}", self.first_key, key, value);
         }
         self.last_key = (key.key_ref().to_vec(), key.ts());
         self.key_hashes.push(farmhash::fingerprint32(key.key_ref()));

@@ -162,13 +162,17 @@ impl LsmStorageInner {
         }
         let mut iter = MergeIterator::create(multi_level_iters);
         let mut builders = vec![SsTableBuilder::new(self.options.block_size)];
+        let mut prev_key: Option<Vec<u8>> = None;
         while iter.is_valid() {
-            if builders.last_mut().unwrap().estimated_size() > self.options.target_sst_size {
+            if builders.last_mut().unwrap().estimated_size() > self.options.target_sst_size
+                && prev_key
+                    .as_ref()
+                    .map_or(true, |key| iter.key().key_ref() != key)
+            {
                 builders.push(SsTableBuilder::new(self.options.block_size));
             }
-            if !iter.value().is_empty() {
-                builders.last_mut().unwrap().add(iter.key(), iter.value());
-            }
+            let _ = prev_key.insert(iter.key().key_ref().to_vec());
+            builders.last_mut().unwrap().add(iter.key(), iter.value());
             iter.next()?;
         }
         let mut new_sstables = Vec::new();

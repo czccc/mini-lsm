@@ -8,7 +8,7 @@ use crate::{
         concat_iterator::SstConcatIterator, merge_iterator::MergeIterator,
         two_merge_iterator::TwoMergeIterator, StorageIterator,
     },
-    key::{KeyBytes, TS_DEFAULT},
+    key::{KeyBytes, KeySlice},
     mem_table::MemTableIterator,
     table::SsTableIterator,
 };
@@ -21,33 +21,29 @@ type LsmIteratorInner = TwoMergeIterator<
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
-    upper: Bound<KeyBytes>,
+    upper: Bound<Bytes>,
 }
 
-/// Create a bound of `Bytes` from a bound of `&[u8]`.
-fn map_bound(bound: Bound<&[u8]>) -> Bound<KeyBytes> {
-    match bound {
-        Bound::Included(x) => Bound::Included(KeyBytes::from_bytes_with_ts(
-            Bytes::copy_from_slice(x),
-            TS_DEFAULT,
-        )),
-        Bound::Excluded(x) => Bound::Excluded(KeyBytes::from_bytes_with_ts(
-            Bytes::copy_from_slice(x),
-            TS_DEFAULT,
-        )),
-        Bound::Unbounded => Bound::Unbounded,
-    }
-}
+// fn map_bound(bound: Bound<KeySlice>) -> Bound<KeyBytes> {
+//     match bound {
+//         Bound::Included(x) => Bound::Included(KeyBytes::from_bytes_with_ts(
+//             Bytes::copy_from_slice(x.key_ref()),
+//             x.ts(),
+//         )),
+//         Bound::Excluded(x) => Bound::Excluded(KeyBytes::from_bytes_with_ts(
+//             Bytes::copy_from_slice(x.key_ref()),
+//             x.ts(),
+//         )),
+//         Bound::Unbounded => Bound::Unbounded,
+//     }
+// }
 
 impl LsmIterator {
-    pub(crate) fn new(mut iter: LsmIteratorInner, upper: Bound<&[u8]>) -> Result<Self> {
+    pub(crate) fn new(mut iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
         while iter.is_valid() && iter.value().is_empty() {
             iter.next()?;
         }
-        Ok(Self {
-            inner: iter,
-            upper: map_bound(upper),
-        })
+        Ok(Self { inner: iter, upper })
     }
 }
 
@@ -57,8 +53,8 @@ impl StorageIterator for LsmIterator {
     fn is_valid(&self) -> bool {
         self.inner.is_valid()
             && match &self.upper {
-                Bound::Included(key) => self.inner.key() <= key.as_key_slice(),
-                Bound::Excluded(key) => self.inner.key() < key.as_key_slice(),
+                Bound::Included(key) => self.inner.key().key_ref() <= key,
+                Bound::Excluded(key) => self.inner.key().key_ref() < key,
                 Bound::Unbounded => true,
             }
     }
@@ -72,8 +68,11 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
+        let prev_key = self.inner.key().key_ref().to_vec();
         self.inner.next()?;
-        while self.inner.is_valid() && self.inner.value().is_empty() {
+        while self.inner.is_valid()
+            && (self.inner.value().is_empty() || self.inner.key().key_ref() == prev_key)
+        {
             self.inner.next()?;
         }
         Ok(())

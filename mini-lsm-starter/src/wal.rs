@@ -12,6 +12,8 @@ use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
+use crate::key::{KeyBytes, KeySlice};
+
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
 }
@@ -28,7 +30,7 @@ impl Wal {
         })
     }
 
-    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
         let mut file = File::options().read(true).write(true).open(path.as_ref())?;
         file.seek(std::io::SeekFrom::Start(0))?;
 
@@ -41,6 +43,8 @@ impl Wal {
             let key_len = buf.get_u32();
             let key = Bytes::copy_from_slice(buf.get(..(key_len as usize)).unwrap());
             buf.advance(key_len as usize);
+            let key_ts = buf.get_u64();
+            let key = KeyBytes::from_bytes_with_ts(key, key_ts);
             let value_len = buf.get_u32();
             let value = Bytes::copy_from_slice(buf.get(..(value_len as usize)).unwrap());
             buf.advance(value_len as usize);
@@ -59,10 +63,11 @@ impl Wal {
         })
     }
 
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
         let mut buf = BytesMut::new();
-        buf.put_u32(key.len() as u32);
-        buf.put(key);
+        buf.put_u32(key.key_len() as u32);
+        buf.put(key.key_ref());
+        buf.put_u64(key.ts());
         buf.put_u32(value.len() as u32);
         buf.put(value);
         // let buf = buf.freeze();

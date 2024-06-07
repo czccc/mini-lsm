@@ -15,7 +15,7 @@ use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
-use crate::key::{KeyBytes, KeySlice, TS_DEFAULT};
+use crate::key::{KeyBytes, KeySlice, TS_RANGE_BEGIN, TS_RANGE_END};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -289,8 +289,8 @@ impl SsTable {
     }
 
     pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
-        self.first_key.as_key_slice() <= KeySlice::from_slice(key, TS_DEFAULT)
-            && KeySlice::from_slice(key, TS_DEFAULT) <= self.last_key.as_key_slice()
+        self.first_key.as_key_slice() <= KeySlice::from_slice(key, TS_RANGE_END)
+            && KeySlice::from_slice(key, TS_RANGE_BEGIN) <= self.last_key.as_key_slice()
             && self
                 .bloom
                 .as_ref()
@@ -299,27 +299,19 @@ impl SsTable {
 
     pub(crate) fn contains_range(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
         match upper {
-            Bound::Excluded(key)
-                if KeySlice::from_slice(key, TS_DEFAULT) <= self.first_key().as_key_slice() =>
-            {
+            Bound::Excluded(key) if key <= self.first_key().key_ref() => {
                 return false;
             }
-            Bound::Included(key)
-                if KeySlice::from_slice(key, TS_DEFAULT) < self.first_key().as_key_slice() =>
-            {
+            Bound::Included(key) if key < self.first_key().key_ref() => {
                 return false;
             }
             _ => {}
         }
         match lower {
-            Bound::Excluded(key)
-                if KeySlice::from_slice(key, TS_DEFAULT) >= self.last_key().as_key_slice() =>
-            {
+            Bound::Excluded(key) if key >= self.last_key().key_ref() => {
                 return false;
             }
-            Bound::Included(key)
-                if KeySlice::from_slice(key, TS_DEFAULT) > self.last_key().as_key_slice() =>
-            {
+            Bound::Included(key) if key > self.last_key().key_ref() => {
                 return false;
             }
             _ => {}
